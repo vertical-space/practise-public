@@ -1,2 +1,1 @@
-# practise-public
-a practise repo. Not private.
+# not private - saved in public github
