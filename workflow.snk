@@ -1,0 +1,213 @@
+"""
+rules.snk
+
+chris cowled 16.08.2018
+
+snakemake -nps workflow.snk 
+"""
+
+rule all:
+    input:
+        "reports/ERR2353209.html"
+
+		
+url_1="ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR235/009/ERR2353209"
+
+rule get_reads:
+    output:
+        "reads/{sample}.1.fastq.gz", 
+        "reads/{sample}.2.fastq.gz"
+    shell:
+        """
+        wget --tries=4 -O {output[0]} %s/ERR2353209_1.fastq.gz
+        wget --tries=4 -O {output[1]} %s/ERR2353209_2.fastq.gz
+        """ % (url_1, url_1)
+		
+
+url_2="ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/003/121/395/GCF_003121395.1_UOA_WB_1"
+
+rule get_genome:
+    output:
+        "genome/water_buffalo_genome.fasta.gz",
+        "genome/water_buffalo_genome.gtf.gz"
+    shell:
+        """
+        wget --tries=4 -O {output[0]} %s/GCF_003121395.1_UOA_WB_1_genomic.fna.gz
+        wget --tries=4 -O {output[1]} %s/GCF_003121395.1_UOA_WB_1_genomic.gff.gz
+        """ % (url_2, url_2)
+
+
+rule unzip_genome_files:
+    input:
+        fa="genome/water_buffalo_genome.fasta.gz",
+	gtf="genome/water_buffalo_genome.gtf.gz"
+    output:
+        fa="genome/water_buffalo_genome.fasta",
+	gtf="genome/water_buffalo_genome.gtf"
+    shell:
+        """
+	gunzip -c {input.fa} > {output.fa}
+	gunzip -c {input.gtf} > {output.gtf}
+	"""
+
+
+rule trim_galore_pe:
+    input:
+        ["reads/{sample}.1.fastq.gz", "reads/{sample}.2.fastq.gz"]
+    output:
+        "trimmed/{sample}.1_val_1.fq.gz",
+        "trimmed/{sample}.1.fastq.gz_trimming_report.txt",
+        "trimmed/{sample}.2_val_2.fq.gz",
+        "trimmed/{sample}.2.fastq.gz_trimming_report.txt"
+    params:
+        extra="--quality 20 --stringency 5 --length 35"
+    log:
+        "logs/trim_galore/{sample}.log"
+    wrapper:
+        "0.27.1/bio/trim_galore/pe"
+
+
+rule fastqc:
+    input:
+        "trimmed/{sample}.fq.gz",
+    output:
+        html="qc/fastqc/{sample}.html",
+        zip="qc/fastqc/{sample}.zip"
+    params: 
+        ""
+    log:
+        "logs/fastqc/{sample}.log"
+    wrapper:
+        "0.27.1/bio/fastqc"
+
+
+rule create_hisat2_index:
+    input:
+        "genome/water_buffalo_genome.fasta"
+    output:
+        expand("UOA_WB_1.{int}.ht2", int=[1,2,3,4,5,6,7,8])
+    threads:
+        8
+    shell:
+        "hisat2-build -p {threads} {input} UOA_WB_1"
+
+ 
+rule hisat2_map_reads:
+    input:
+        reads=["trimmed/{sample}.1_val_1.fq.gz", "trimmed/{sample}.2_val_2.fq.gz"],
+        index=expand("UOA_WB_1.{int}.ht2", int=[1,2,3,4,5,6,7,8])
+    output:
+        "mapped/{sample}.bam"
+    log:                                # optional
+        "logs/hisat2/{sample}.log"
+    params:                             # idx is required, extra is optional
+        idx="UOA_WB_1",
+    threads: 
+        8                               # optional, defaults to 1
+    wrapper:
+        "0.27.1/bio/hisat2"
+
+
+rule samtools_sort:
+     input:
+         "mapped/{sample}.bam"
+     output:
+         "sorted/{sample}.bam"
+     shell:
+         "samtools sort -o {output} {input}"
+
+
+rule samtools_index:
+    input:
+         "sorted/{sample}.bam"
+    output:
+         "sorted/{sample}.bam.bai"
+    shell:
+         "samtools index {input}"
+
+		 
+rule bcftools_call_variants:
+    input:
+        genome="genome/water_buffalo_genome.fasta",
+        bam="sorted/{sample}.bam",
+        bai="sorted/{sample}.bam.bai"
+    output:
+        "variation/{sample}.vcf"
+    log:
+        "logs/bcftools/{sample}.log"
+    shell:
+        """
+        bcftools mpileup --output-type u \
+                         --skip-indels \
+                         --fasta-ref {input.genome} {input.bam} \
+         | bcftools call --output-type v \
+                         --consensus-caller \
+                         --variants-only \
+                         --output {output}
+        """
+
+
+rule index_vcf:
+    input:
+        "variation/{sample}.vcf"
+    output:
+        "variation/{sample}.vcf.gz",
+        "variation/{sample}.vcf.gz.tbi"
+    shell:
+        """
+        bgzip -c {input} > {output[0]}
+        tabix -p vcf {output[0]}
+        """
+
+
+rule allelecounter:
+    input:
+        script="allelecounter/allelecounter.py",
+	vcf="variation/{sample}.vcf.gz",
+	index="variation/{sample}.vcf.gz.tbi",
+	bam="sorted/{sample}.bam",
+	genome="genome/water_buffalo_genome.fasta"
+    output:
+        csv="allelic_expression/{sample}.csv"
+    conda:
+        "envs/allelecounter.yaml"
+    shell:
+        """
+        python {input.script} --vcf {input.vcf} \
+                              --sample {input.bam} \
+                              --bam {input.bam} \
+                              --ref {input.genome} \
+                              --min_cov 10 \
+                              --min_baseq 16 \
+                              --min_mapq 35 \
+                              --o {output.csv}
+        """
+
+
+rule report:
+    input:
+        "variation/{sample}.vcf",
+        "allelic_expression/{sample}.csv",
+        "qc/fastqc/{sample}.1_val_1.zip",
+        "qc/fastqc/{sample}.2_val_2.zip"
+    output:
+        "reports/{sample}.html"
+    run:
+        from snakemake.utils import report
+        with open(input[0]) as vcf:
+            n_calls = sum(1 for l in vcf if not l.startswith("#"))
+
+        report("""
+        An example variant calling workflow
+        ===================================
+
+        Reads were mapped to the Yeast
+        reference genome and variants were called jointly with
+        SAMtools/BCFtools.
+
+        This resulted in {n_calls} variants (see Table T1_).
+        """, output[0], T1=input[0])
+
+
+
+

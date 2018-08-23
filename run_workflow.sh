@@ -1,8 +1,7 @@
 #!/bin/sh
-# Grid Engine options (lines prefixed with #$)
 #$ -N snakemake_memtest              
 #$ -cwd                  
-#$ -l h_rt=00:30:00 
+#$ -l h_rt=03:00:00 
 #$ -l h_vmem=32G
 
 # Initialise the environment modules
@@ -12,8 +11,8 @@
 module load anaconda
 
 # load virtal environment
-source activate ase
- 
+source activate env3
+
 # Run the program
-snakemake -s rules.snk
+snakemake --use-conda -s workflow.snk
 
