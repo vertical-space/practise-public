@@ -6,12 +6,39 @@ chris cowled 16.08.2018
 snakemake -nps workflow.snk 
 """
 
+import pandas as pd
+
+headers = ['sample', 'tissue', 'category', 'sex', 'age', 'region', 'country']
+accessions = pd.read_csv("ERA1230280.csv")
+metadata = pd.read_csv("buffalo_sample_metadata.csv", header=None, names=headers, index_col=0)
+
+url_index = dict(zip(
+    accessions['run_accession'],
+    accessions['sra_ftp'],
+    )
+)
+
+run2sampleACC = dict(zip(
+    accessions['run_accession'],
+    accessions['secondary_sample_accession'],
+    )
+)
+
+sample = "ERR2353209"
+
+print('run\t', sample)
+print('sample\t', run2sampleACC[sample])
+print('url\t', url_index[sample])
+print(metadata.loc[run2sampleACC[sample],])
+
+
 rule all:
     input:
         "reports/ERR2353209.html"
 
 		
-url_1="ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR235/009/ERR2353209"
+url_1="ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR235/009"
+url_2="ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/003/121/395/GCF_003121395.1_UOA_WB_1"
 
 rule get_reads:
     output:
@@ -19,39 +46,44 @@ rule get_reads:
         "reads/{sample}.2.fastq.gz"
     shell:
         """
-        wget --tries=4 -O {output[0]} %s/ERR2353209_1.fastq.gz
-        wget --tries=4 -O {output[1]} %s/ERR2353209_2.fastq.gz
-        """ % (url_1, url_1)
-		
+        wget --tries=4 -O {output[0]} {url}/{wildcards.sample}/{wildcards.sample}_1.fastq.gz
+        wget --tries=4 -O {output[1]} {url}/{wildcards.sample}/{wildcards.sample}_2.fastq.gz
+        """
 
-url_2="ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/003/121/395/GCF_003121395.1_UOA_WB_1"
 
 rule get_genome:
     output:
-        "genome/water_buffalo_genome.fasta.gz",
+        "genome/water_buffalo_genome.fasta.gz"
+    shell:
+        "wget --tries=4 -O {output} %s/GCF_003121395.1_UOA_WB_1_genomic.fna.gz" % url_2
+
+
+rule get_gtf:
+    output:
         "genome/water_buffalo_genome.gtf.gz"
     shell:
-        """
-        wget --tries=4 -O {output[0]} %s/GCF_003121395.1_UOA_WB_1_genomic.fna.gz
-        wget --tries=4 -O {output[1]} %s/GCF_003121395.1_UOA_WB_1_genomic.gff.gz
-        """ % (url_2, url_2)
+        "wget --tries=4 -O {output} %s/GCF_003121395.1_UOA_WB_1_genomic.gff.gz" % url_2
 
 
-rule unzip_genome_files:
+rule unzip_genome:
     input:
-        fa="genome/water_buffalo_genome.fasta.gz",
-	gtf="genome/water_buffalo_genome.gtf.gz"
+        "genome/water_buffalo_genome.fasta.gz"
     output:
-        fa="genome/water_buffalo_genome.fasta",
-	gtf="genome/water_buffalo_genome.gtf"
+        "genome/water_buffalo_genome.fasta"
     shell:
-        """
-	gunzip -c {input.fa} > {output.fa}
-	gunzip -c {input.gtf} > {output.gtf}
-	"""
+        "gunzip -c {input} > {output}"
 
 
-rule trim_galore_pe:
+rule unzip_gtf:
+    input:
+        "genome/water_buffalo_genome.gtf.gz"
+    output:
+        "genome/water_buffalo_genome.gtf"
+    shell:
+        "gunzip -c {input} > {output}"
+
+
+rule trim_reads:
     input:
         ["reads/{sample}.1.fastq.gz", "reads/{sample}.2.fastq.gz"]
     output:
@@ -71,14 +103,32 @@ rule fastqc:
     input:
         "trimmed/{sample}.fq.gz",
     output:
-        html="qc/fastqc/{sample}.html",
-        zip="qc/fastqc/{sample}.zip"
+        html="fastqc/{sample}.html",
+        zip="fastqc/{sample}.zip"
     params: 
         ""
     log:
         "logs/fastqc/{sample}.log"
     wrapper:
         "0.27.1/bio/fastqc"
+
+
+rule unzip_fastqc_output:
+    input:
+        "fastqc/{sample}.1_val_1.zip",
+        "fastqc/{sample}.2_val_2.zip"
+    output:
+        "fastqc/{sample}.1_val_1_fastqc/Images/per_base_quality.png",
+        "fastqc/{sample}.2_val_2_fastqc/Images/per_base_quality.png",
+        "graphics/{sample}.1.per_base_quality.png",
+        "graphics/{sample}.2.per_base_quality.png"
+    shell:
+        """
+        unzip -q -u -d fastqc {input[0]}
+        unzip -q -u -d fastqc {input[1]}
+        cp {output[0]} {output[2]}
+        cp {output[1]} {output[3]}
+        """
 
 
 rule create_hisat2_index:
@@ -125,22 +175,66 @@ rule samtools_index:
     shell:
          "samtools index {input}"
 
-		 
-rule bcftools_call_variants:
+
+#rule gtf2bed_original:
+#    input:
+#        "genome/{sample}.gtf"
+#    output:
+#        bed=temp("genome/{sample}.original.bed"),
+#        sorted=temp("genome/{sample}.bed.sorted"),
+#        merged="genome/{sample}.merged.bed.txt"            # this file MUST NOT end in .bed
+#    conda:
+#        "envs/bcftools.yaml"
+#    log:
+#        "logs/bedtools/{sample}.log"
+#    shell:
+#        """
+#        awk -F "\t" "{ if($3 == 'exon') printf('%s\t%s\t%s\t.\t%s\t%s\n',$1,$4,$5,$6,$7)}" {input} > {output.bed}
+#        bedtools sort -i {output.bed} > {output.sorted}
+#        bedtools merge -i {output.sorted} > {output.merged}
+#        """
+
+
+rule gtf2bed:
+    input:
+        script="scripts/convert2bed.py",
+        gtf="genome/{sample}.gtf"
+    output:
+        bed="genome/{sample}.bed",
+        sorted="genome/{sample}.sorted",
+        merged="genome/{sample}.merged.bed",            # for use with bedtools
+        renamed="genome/{sample}.merged.bed.txt"        # for use with bcftools mpileup
+    shell:
+        """
+        python {input.script} {input.gtf}
+        bedtools sort -i {output.bed} > {output.sorted}
+        bedtools merge -i {output.sorted} -c 4,5,6 -o distinct > {output.merged}
+        cp {output.merged} {output.renamed}
+        """
+
+
+rule call_variants:
     input:
         genome="genome/water_buffalo_genome.fasta",
+        bed="genome/water_buffalo_genome.merged.bed.txt",  # must not end in .bed
         bam="sorted/{sample}.bam",
         bai="sorted/{sample}.bam.bai"
     output:
         "variation/{sample}.vcf"
     log:
         "logs/bcftools/{sample}.log"
+    threads:
+        8
     shell:
         """
         bcftools mpileup --output-type u \
                          --skip-indels \
-                         --fasta-ref {input.genome} {input.bam} \
+                         --threads {threads} \
+                         --fasta-ref {input.genome} \
+                         --regions-file {input.bed} \
+                         {input.bam} \
          | bcftools call --output-type v \
+                         --threads {threads} \
                          --consensus-caller \
                          --variants-only \
                          --output {output}
@@ -160,7 +254,7 @@ rule index_vcf:
         """
 
 
-rule allelecounter:
+rule allele_counter:
     input:
         script="allelecounter/allelecounter.py",
 	vcf="variation/{sample}.vcf.gz",
@@ -168,7 +262,7 @@ rule allelecounter:
 	bam="sorted/{sample}.bam",
 	genome="genome/water_buffalo_genome.fasta"
     output:
-        csv="allelic_expression/{sample}.csv"
+        csv="expression/{sample}.csv"
     conda:
         "envs/allelecounter.yaml"
     shell:
@@ -184,29 +278,114 @@ rule allelecounter:
         """
 
 
+rule vcf2bed:
+    input:
+        script="scripts/convert2bed.py",
+        vcf="variation/{sample}.vcf"
+    output:
+        bed="variation/{sample}.bed",
+        merged="variation/{sample}.merged.bed"
+    shell:
+        """
+        python {input.script} {input.vcf}
+        sort {output.bed} | uniq > {output.merged}
+        """
+
+
+rule csv2bed:
+    input:
+        script="scripts/convert2bed.py",
+        csv="expression/{sample}.csv"
+    output:
+        "expression/{sample}.bed"
+    shell:
+        "python {input.script} {input.csv}"
+
+
+#rule deduplicate_bedfile:
+#    input:
+#        "genome/{sample}.bed"
+#    output:
+#        "genome/{sample}.dedup.bed"
+#    shell:
+#        "sort {input} | uniq > {output}"
+
+
+rule annotate:
+    input:
+        snps="variation/{sample}.merged.bed",                        
+        annotation="genome/water_buffalo_genome.merged.bed"            # must end in .bed (created by gtf2bed_modified)
+    output:
+        "merged/{sample}.merged.csv"
+    shell:
+        "bedtools intersect -a {input.snps} -b {input.annotation} -wa -wb > {output}"
+
+
+rule summary:
+    input:
+        script="scripts/genewiseMAFC.py",
+        data="merged/{sample}.merged.csv"
+    output:
+        "results/{sample}.summary.csv"
+    shell:
+        "python {input.script} -i {input.data} -o {output}"
+
+
+rule graph_workflow:
+    input:
+        "workflow.snk"
+    output:
+        "graphics/rulegraph.png"
+    shell:
+        "snakemake -s {input} --rulegraph 2> /dev/null | dot -T png > {output}"
+
+
 rule report:
     input:
-        "variation/{sample}.vcf",
-        "allelic_expression/{sample}.csv",
-        "qc/fastqc/{sample}.1_val_1.zip",
-        "qc/fastqc/{sample}.2_val_2.zip"
+        fq1="graphics/{sample}.1.per_base_quality.png",
+        fq2="graphics/{sample}.2.per_base_quality.png",
+        exp="expression/{sample}.csv",
+        res="results/{sample}.summary.csv",
+        graph="graphics/rulegraph.png"
     output:
         "reports/{sample}.html"
     run:
-        from snakemake.utils import report
-        with open(input[0]) as vcf:
-            n_calls = sum(1 for l in vcf if not l.startswith("#"))
+        from snakemake.utils import report as html_report
 
-        report("""
-        An example variant calling workflow
-        ===================================
+        with open(input.exp) as counts:
+            n_counts = sum(1 for l in counts if not l.startswith("#")) - 1
 
-        Reads were mapped to the Yeast
-        reference genome and variants were called jointly with
-        SAMtools/BCFtools.
+        with open(input.res) as genes:
+            n_genes = sum(1 for l in genes if not l.startswith("#")) - 1
 
-        This resulted in {n_calls} variants (see Table T1_).
-        """, output[0], T1=input[0])
+        html_report("""
+        A workflow for performing allele specific expression (ASE)
+
+        reads_1
+
+        .. image:: {input.fq1}
+
+        reads_2
+
+        .. image:: {input.fq2}
+
+        Reads were trimmed with Trimgalore
+
+        Reads were mapped to the buffalo genome with hisat2
+
+        variants were called with BCFtools
+
+        counts were determined by allelecounter.py
+
+        python scripts were used for the other steps
+
+        This resulted in {n_counts} snps (see Table exp_)
+
+        This resulted in {n_genes} genes (see Table res_)
+
+        .. image:: {input.graph}
+        """, output[0], metadata="Author: Chris Cowled (chris.cowled@csiro.au)", **input)
+
 
 
 
