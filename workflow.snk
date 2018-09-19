@@ -427,6 +427,8 @@ rule report:
         This resulted in {n_genes} genes (see Table res_)
 
         .. image:: {input.graph}
+        
+        {results_table}
         """, output[0], metadata="Author: Chris Cowled (chris.cowled@csiro.au)", **input)
 
 

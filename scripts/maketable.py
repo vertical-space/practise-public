@@ -32,6 +32,7 @@ def make_table_from_df(df):
         df = df.to_frame()   # just in case it's actually a series
     except AttributeError:
         pass
+    df = df.astype(str)
     grid = [list(df.columns),] + df.values.tolist()
     return make_table(grid)
 
