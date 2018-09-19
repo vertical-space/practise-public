@@ -45,9 +45,8 @@ rule get_reads:
         reads = url_index[run_acc].split(';')
         shell("""
               wget --tries=4 -O {output[0]} {reads[0]}
-              wget --tries=4 -O {output[0]} {reads[1]}
+              wget --tries=4 -O {output[1]} {reads[1]}
               """)
-
 
 url="ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/003/121/395/GCF_003121395.1_UOA_WB_1"
 
@@ -375,6 +374,7 @@ rule report:
         "reports/{sample}.html"
     run:
         from snakemake.utils import report as html_report
+        from scripts import maketable
 
         with open(input.exp) as counts:
             n_counts = sum(1 for l in counts if not l.startswith("#")) - 1
@@ -382,19 +382,27 @@ rule report:
         with open(input.res) as genes:
             n_genes = sum(1 for l in genes if not l.startswith("#")) - 1
 
-        s = list({wildcards.sample})[0]
-
-        meta = '\n\nrun:\t%s\nsample:\t%s\nurl:\t%s\n\n%s\n' % (
-            s, 
-            run2sampleACC[s], 
-            url_index[s], 
-            metadata.loc[run2sampleACC[s],],
-        )
+        sample_acc = list({wildcards.sample})[0]
+        run_acc = sample2runACC[sample_acc]
+        reads = url_index[run_acc].split(';')
+        url_1 = reads[0]
+        url_2 = reads[1]
+        metadata_table = maketable.make_table_from_df(metadata.loc[sample_acc,])
+        results_table = maketable.make_table_from_csv(input.res)
 
         html_report("""
         A workflow for performing allele specific expression (ASE)
+        ==========================================================
 
-        {meta}
+        {run_acc}
+
+        {sample_acc}
+
+        {url_1}
+        
+        {url_2}
+
+        {metadata_table}
 
         reads_1
 
