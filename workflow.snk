@@ -14,7 +14,7 @@ metadata = pd.read_csv("buffalo_sample_metadata.csv", header=None, names=headers
 
 url_index = dict(zip(
     accessions['run_accession'],
-    accessions['sra_ftp'],
+    accessions['fastq_ftp'],
     )
 )
 
@@ -24,45 +24,45 @@ run2sampleACC = dict(zip(
     )
 )
 
-sample = "ERR2353209"
-
-print('run\t', sample)
-print('sample\t', run2sampleACC[sample])
-print('url\t', url_index[sample])
-print(metadata.loc[run2sampleACC[sample],])
-
+sample2runACC = dict(zip(
+    accessions['secondary_sample_accession'],
+    accessions['run_accession'],
+    )
+)
 
 rule all:
     input:
-        "reports/ERR2353209.html"
+        #"reports/ERR2353209.html"
+        "reports/ERS2495958.html"
 
-		
-url_1="ftp://ftp.sra.ebi.ac.uk/vol1/fastq/ERR235/009"
-url_2="ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/003/121/395/GCF_003121395.1_UOA_WB_1"
 
 rule get_reads:
     output:
-        "reads/{sample}.1.fastq.gz", 
+        "reads/{sample}.1.fastq.gz",
         "reads/{sample}.2.fastq.gz"
-    shell:
-        """
-        wget --tries=4 -O {output[0]} {url}/{wildcards.sample}/{wildcards.sample}_1.fastq.gz
-        wget --tries=4 -O {output[1]} {url}/{wildcards.sample}/{wildcards.sample}_2.fastq.gz
-        """
+    run:
+        run_acc = sample2runACC[list({wildcards.sample})[0]]
+        reads = url_index[run_acc].split(';')
+        shell("""
+              wget --tries=4 -O {output[0]} {reads[0]}
+              wget --tries=4 -O {output[0]} {reads[1]}
+              """)
 
+
+url="ftp://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/003/121/395/GCF_003121395.1_UOA_WB_1"
 
 rule get_genome:
     output:
         "genome/water_buffalo_genome.fasta.gz"
     shell:
-        "wget --tries=4 -O {output} %s/GCF_003121395.1_UOA_WB_1_genomic.fna.gz" % url_2
+        "wget --tries=4 -O {output} {url}/GCF_003121395.1_UOA_WB_1_genomic.fna.gz"
 
 
 rule get_gtf:
     output:
         "genome/water_buffalo_genome.gtf.gz"
     shell:
-        "wget --tries=4 -O {output} %s/GCF_003121395.1_UOA_WB_1_genomic.gff.gz" % url_2
+        "wget --tries=4 -O {output} {url}/GCF_003121395.1_UOA_WB_1_genomic.gff.gz"
 
 
 rule unzip_genome:
@@ -136,6 +136,8 @@ rule create_hisat2_index:
         "genome/water_buffalo_genome.fasta"
     output:
         expand("UOA_WB_1.{int}.ht2", int=[1,2,3,4,5,6,7,8])
+    conda:
+        "envs/hisat2.yaml"
     threads:
         8
     shell:
@@ -154,26 +156,32 @@ rule hisat2_map_reads:
         idx="UOA_WB_1",
     threads: 
         8                               # optional, defaults to 1
+    conda:
+        "envs/hisat2.yaml"
     wrapper:
         "0.27.1/bio/hisat2"
 
 
 rule samtools_sort:
-     input:
-         "mapped/{sample}.bam"
-     output:
-         "sorted/{sample}.bam"
-     shell:
-         "samtools sort -o {output} {input}"
+    input:
+        "mapped/{sample}.bam"
+    output:
+        "sorted/{sample}.bam"
+    conda:
+        "envs/samtools.yaml"
+    shell:
+        "samtools sort -o {output} {input}"
 
 
 rule samtools_index:
     input:
-         "sorted/{sample}.bam"
+        "sorted/{sample}.bam"
     output:
-         "sorted/{sample}.bam.bai"
+        "sorted/{sample}.bam.bai"
+    conda:
+        "envs/samtools.yaml"
     shell:
-         "samtools index {input}"
+        "samtools index {input}"
 
 
 #rule gtf2bed_original:
@@ -204,6 +212,8 @@ rule gtf2bed:
         sorted="genome/{sample}.sorted",
         merged="genome/{sample}.merged.bed",            # for use with bedtools
         renamed="genome/{sample}.merged.bed.txt"        # for use with bcftools mpileup
+    conda:
+        "envs/gtf2bed.yaml"
     shell:
         """
         python {input.script} {input.gtf}
@@ -225,6 +235,8 @@ rule call_variants:
         "logs/bcftools/{sample}.log"
     threads:
         8
+    conda:
+        "envs/bcftools.yaml"
     shell:
         """
         bcftools mpileup --output-type u \
@@ -247,6 +259,8 @@ rule index_vcf:
     output:
         "variation/{sample}.vcf.gz",
         "variation/{sample}.vcf.gz.tbi"
+    conda:
+        "envs/samtools.yaml"
     shell:
         """
         bgzip -c {input} > {output[0]}
@@ -285,6 +299,8 @@ rule vcf2bed:
     output:
         bed="variation/{sample}.bed",
         merged="variation/{sample}.merged.bed"
+    conda:
+        "envs/bcftools.yaml"
     shell:
         """
         python {input.script} {input.vcf}
@@ -298,6 +314,8 @@ rule csv2bed:
         csv="expression/{sample}.csv"
     output:
         "expression/{sample}.bed"
+    conda:
+        "envs/bcftools.yaml"
     shell:
         "python {input.script} {input.csv}"
 
@@ -317,6 +335,8 @@ rule annotate:
         annotation="genome/water_buffalo_genome.merged.bed"            # must end in .bed (created by gtf2bed_modified)
     output:
         "merged/{sample}.merged.csv"
+    conda:
+        "envs/gtf2bed.yaml"
     shell:
         "bedtools intersect -a {input.snps} -b {input.annotation} -wa -wb > {output}"
 
@@ -327,6 +347,8 @@ rule summary:
         data="merged/{sample}.merged.csv"
     output:
         "results/{sample}.summary.csv"
+    conda:
+        "envs/bcftools.yaml"
     shell:
         "python {input.script} -i {input.data} -o {output}"
 
@@ -336,6 +358,8 @@ rule graph_workflow:
         "workflow.snk"
     output:
         "graphics/rulegraph.png"
+    conda:
+        "envs/graphviz.yaml"
     shell:
         "snakemake -s {input} --rulegraph 2> /dev/null | dot -T png > {output}"
 
@@ -358,8 +382,19 @@ rule report:
         with open(input.res) as genes:
             n_genes = sum(1 for l in genes if not l.startswith("#")) - 1
 
+        s = list({wildcards.sample})[0]
+
+        meta = '\n\nrun:\t%s\nsample:\t%s\nurl:\t%s\n\n%s\n' % (
+            s, 
+            run2sampleACC[s], 
+            url_index[s], 
+            metadata.loc[run2sampleACC[s],],
+        )
+
         html_report("""
         A workflow for performing allele specific expression (ASE)
+
+        {meta}
 
         reads_1
 

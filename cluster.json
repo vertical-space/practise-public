@@ -1,0 +1,27 @@
+{
+    "__default__" :
+    {
+        "core" : "1",
+        "time" : "01:00:00",
+        "vmem" : "8G"
+    },
+     "create_hisat2_index" :
+     {
+         "core" : "8",
+         "time" : "03:00:00",
+         "vmem" : "8G"
+     },
+     "hisat2_map_reads" :
+      {
+          "core" : "8",
+          "time" : "03:00:00",
+          "vmem" : "8G"
+      },
+     "call_variants" :
+      {
+          "core" : "8",
+          "time" : "03:00:00",
+          "vmem" : "8G"
+      }
+}
+
